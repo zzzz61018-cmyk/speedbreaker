@@ -85,16 +85,17 @@ export default async function handler(req, res) {
   const params = new URLSearchParams(initData);
   const startapp = params.get("start_param");
   const chat_type=params.get("chat_type");
-  if(chat_type!='sender'){
-    await addBlock(userId);
-    return res.json({ ok: false, error: "You are blocked for violation" });
-  }
+  
   const userJson = params.get("user"); // string
   if (!userJson) {
     return res.json({ ok: false, error: "Invalid data" });
   }
   const user = JSON.parse(userJson);
   const userId = user.id;
+  if(chat_type!='sender'){
+    await addBlock(userId);
+    return res.json({ ok: false, error: "You are blocked for violation" });
+  }
   const checkblocked=await isBlocked(userId);
   if(checkblocked){
     return res.json({ ok: false, error: "You were blocked Earlier contact mods" });
