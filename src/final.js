@@ -85,6 +85,7 @@ export default async function handler(req, res) {
   const params = new URLSearchParams(initData);
   const startapp = params.get("start_param");
   const chat_type=params.get("chat_type");
+  const chat_instance=params.get("chat_instance");
   
   const userJson = params.get("user"); // string
   if (!userJson) {
@@ -92,6 +93,7 @@ export default async function handler(req, res) {
   }
   const user = JSON.parse(userJson);
   const userId = user.id;
+  console.log("User ID:", userId, "Chat Type:", chat_type, "Chat Instance:", chat_instance);
   if(chat_type!='sender'){
     await addBlock(userId);
     return res.json({ ok: false, error: "You are blocked for violation" });
