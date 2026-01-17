@@ -3,8 +3,9 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import bot from "./bot.js";
-import verify from "./verify.js";
+import first from "./first.js";
 import final from "./final.js";
+
 
 const app = express();
 
@@ -19,17 +20,12 @@ app.use(express.static(path.join(__dirname, "../public")));
 
 // API routes
 app.use("/api/bot", bot);
-app.use("/api/verify", verify);
+app.use("/api/first", first);
 app.use("/api/final", final);
 
 app.get("/api/hello", (req, res) => {
   res.json({ message: "Express with ES Modules works on Vercel 🚀" });
 });
-
-// // fallback
-// app.get("/.*/", (req, res) => {
-//   res.status(404).send("Unknown Link");
-// });
 
 // 🚨 DO NOT LISTEN
 export default app;

@@ -1,109 +1,161 @@
-import { createClient } from "@supabase/supabase-js";
 import crypto from "crypto";
-import fetch from "node-fetch";
+import TelegramBot from "node-telegram-bot-api";
+import { createClient } from "@supabase/supabase-js";
 
+const bot = new TelegramBot(process.env.BOT_TOKEN);
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
+  process.env.SUPABASE_SERVICE_KEY,
 );
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
+/* ================= VERIFY INIT DATA ================= */
+
+function verifyInitData(initData) {
+  const urlParams = new URLSearchParams(initData);
+  const hash = urlParams.get("hash");
+  urlParams.delete("hash");
+  urlParams.sort();
+
+  let dataCheckString = "";
+  for (const [key, value] of urlParams.entries()) {
+    dataCheckString += `${key}=${value}\n`;
+  }
+  dataCheckString = dataCheckString.slice(0, -1);
+
+  const secret = crypto
+    .createHmac("sha256", "WebAppData")
+    .update(process.env.BOT_TOKEN)
+    .digest();
+
+  const calculatedHash = crypto
+    .createHmac("sha256", secret)
+    .update(dataCheckString)
+    .digest("hex");
+
+  return calculatedHash === hash;
+}
 
 /* ================= HELPERS ================= */
-
+async function isBlocked(id) {
+  const { data } = await supabase
+    .from("blocklist")
+    .select("id")
+    .eq("id", id)
+    .single();
+  return !!data;
+}
+async function addBlock(id) {
+  const checkMod = await isMod(id);
+  if (checkMod) return;
+  await supabase.from("blocklist").upsert({ id });
+}
+async function isMod(id) {
+  const { data } = await supabase
+    .from("mods")
+    .select("id")
+    .eq("id", id)
+    .single();
+  return !!data;
+}
 function hashIP(ip) {
   return crypto.createHash("sha256").update(ip).digest("hex");
 }
 
 async function createOneTimeInvite(entityId) {
-  const res = await fetch(
-    `https://api.telegram.org/bot${BOT_TOKEN}/createChatInviteLink`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: entityId,
-        expire_date: Math.floor(Date.now() / 1000) + 300, // 5 min
-        member_limit: 1
-      })
-    }
-  );
-
-  const json = await res.json();
-  if (!json.ok) throw new Error("Invite creation failed");
-
-  return json.result.invite_link;
+  const expire = Math.floor(Date.now() / 1000) + 300; // 5 min
+  const invite = await bot.createChatInviteLink(entityId, {
+    member_limit: 1,
+    expire_date: expire,
+  });
+  return invite.invite_link;
 }
 
 /* ================= HANDLER ================= */
 
 export default async function handler(req, res) {
-  const {entity_id } = req.query;
-  if (!entity_id) {
-    return res.status(403).send("Access denied");
+  if (req.method !== "POST") return res.status(200).end();
+  
+
+  const { initData } = req.body;
+
+  if (!verifyInitData(initData)) {
+    return res.json({ ok: false, error: "Invalid data" });
   }
 
-  // Get IP (Vercel-safe)
+  const params = new URLSearchParams(initData);
+  const startapp = params.get("start_param");
+  const chat_type=params.get("chat_type");
+  if(chat_type!='sender'){
+    await addBlock(userId);
+    return res.json({ ok: false, error: "You are blocked for violation" });
+  }
+  const userJson = params.get("user"); // string
+  if (!userJson) {
+    return res.json({ ok: false, error: "Invalid data" });
+  }
+  const user = JSON.parse(userJson);
+  const userId = user.id;
+  const checkblocked=await isBlocked(userId);
+  if(checkblocked){
+    return res.json({ ok: false, error: "You were blocked Earlier contact mods" });
+  }
+
+  if (!startapp || !startapp.startsWith("final_")) {
+    return res.json({ ok: false, error: "Invalid startapp" });
+  }
+
+  // fetch row by FINAL
+  const { data: row } = await supabase
+    .from("my_links")
+    .select("*")
+    .eq("final", startapp)
+    .single();
+
+  if (!row) {
+    return res.json({ ok: false, error: "Invalid code" });
+  }
+
+  // CASE 1: NO FIRST → DIRECT FINAL ACCESS
+  if (!row.first) {
+    try {
+      const invite = await createOneTimeInvite(row.entity_id);
+      return res.json({ ok: true, link: invite });
+    } catch {
+      return res.json({ ok: false, error: "Bot issue" });
+    }
+  }
+
+  // CASE 2: FIRST EXISTS → IP VALIDATION REQUIRED
   const ip =
     req.headers["x-forwarded-for"]?.split(",")[0] ||
     req.socket.remoteAddress ||
-    "";
-  console.log(ip);
+    "0.0.0.0";
 
   const ipHash = hashIP(ip);
 
-  const { data } = await supabase
+  const { data: temp } = await supabase
     .from("temp_access")
     .select("*")
     .eq("ip_hash", ipHash)
     .single();
 
-  if (!data) {
-    return res.status(403).send("Invalid entry");
+  if (!temp) {
+    await addBlock(userId);
+    return res.json({ ok: false, error: "Access denied and you are blocked" });
   }
 
-  // Verify IP
-  if (data.ip_hash !== ipHash) {
-    return res.status(403).send("Invalid entry");
-  }
-  const {data: my_link}= await supabase
-  .from("links")
-  .select("*")
-  .eq("short", data.startapp)
-  .single();
-  console.log("data", data,"link", my_link);
-
-  // Verify entity
-  if (String(my_link.entity_id) !== String(entity_id)) {
-    return res.status(403).send("Invalid entry");
+  // temp.startapp must match FIRST
+  if (temp.startapp !== row.first || userId != temp.user_id) {
+    await addBlock(userId);
+    return res.json({ ok: false, error: "Invalid access path and you are blocked" });
   }
 
-  // Prevent reuse
-  if (data.verified) {
-    return res.status(403).send("Invalid entry");
-  }
-
-  // Create invite
-  let inviteLink;
+  // VALID → CREATE INVITE
   try {
-    inviteLink = await createOneTimeInvite(entity_id);
+    const invite = await createOneTimeInvite(row.entity_id);
+    await supabase.from("temp_access").delete().eq("ip_hash", ipHash);
+    return res.json({ ok: true, link: invite });
   } catch {
-    return res.status(500).send("Unable to respond");
+    return res.json({ ok: false, error: "Bot issue" });
   }
-
-  // Mark verified (do NOT delete, for audit)
-  await supabase
-    .from("temp_access")
-    .update({ verified: true })
-    .eq("id", data.id);
-
-  res.send(`
-    <html>
-      <body style="font-family:sans-serif">
-        <h3>Access Granted ✅</h3>
-        <p>This link expires in 5 minutes and works once.</p>
-        <a href="${inviteLink}" target="_blank">Join Telegram</a>
-      </body>
-    </html>
-  `);
 }

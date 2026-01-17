@@ -35,13 +35,14 @@ function verifyTelegram(initData) {
 function hashIP(ip) {
   return crypto.createHash("sha256").update(ip).digest("hex");
 }
-async function getShortLink(short) {
+async function getFirstLink(first) {
   const { data } = await supabase
-    .from("links")
-    .select("short_link")
-    .eq("short", short)
+    .from("my_links")
+    .select("link")
+    .eq("first", first)
     .single();
-  return data?.short_link;
+
+  return data?.link;
 }
 /* ================== HANDLER ================== */
 
@@ -49,12 +50,12 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
 
   const { initData } = req.body;
+
   if (!verifyTelegram(initData)) {
     return res.status(400).json({ error: "Invalid Telegram data" });
   }
 
   const params = new URLSearchParams(initData);
-
   const startapp = params.get("start_param");
   const userJson = params.get("user");
 
@@ -62,32 +63,45 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Invalid Telegram data" });
   }
 
+  // you already enforce this, keeping safety
+  if (!startapp.startsWith("first_")) {
+    return res.status(400).json({ error: "Invalid startapp" });
+  }
+
   const user = JSON.parse(userJson);
   const userId = user.id;
 
-  // Get IP safely (Vercel compatible)
   const ip =
     req.headers["x-forwarded-for"]?.split(",")[0] ||
     req.socket.remoteAddress ||
     "0.0.0.0";
 
   const ipHash = hashIP(ip);
-  const { error } = await supabase
-  .from("temp_access")
-  .delete()
-  .eq("ip_hash", ipHash);
 
+  // clean previous attempt from same IP
+  await supabase
+    .from("temp_access")
+    .delete()
+    .eq("ip_hash", ipHash);
 
+  // store attempt
   await supabase.from("temp_access").insert({
     ip_hash: ipHash,
     user_id: userId,
-    startapp:startapp,
-    verified:false
+    startapp,
+    verified: false,
   });
-  const shortLink = await getShortLink(startapp);
-  if(shortLink){
-    res.json({ status: "ok", shortLink });
-  }else{
-    res.json({ status: "ok" });
+
+  // fetch THIRD-PARTY LINK
+  const link = await getFirstLink(startapp);
+
+  if (!link) {
+    return res.status(404).json({ error: "Invalid or inactive link" });
   }
+
+  // ONLY return external link
+  return res.json({
+    status: "ok",
+    link,
+  });
 }
