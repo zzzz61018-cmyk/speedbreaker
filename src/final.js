@@ -86,6 +86,7 @@ export default async function handler(req, res) {
   const params = new URLSearchParams(initData);
   const startapp = params.get("start_param");
   const chat_type = params.get("chat_type");
+  const chat_instance = params.get("chat_instance");
   const userJson = params.get("user");
 
   if (!userJson || !startapp || !startapp.startsWith("final_")) {
@@ -94,6 +95,7 @@ export default async function handler(req, res) {
 
   const user = JSON.parse(userJson);
   const userId = user.id;
+  console.log(" user ID:", userId," chat type:", chat_type, " chat_instance:", chat_instance);
 
   if (chat_type !== "sender") {
     await addBlock(userId);
