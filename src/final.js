@@ -98,12 +98,11 @@ export default async function handler(req, res) {
   console.log(" user ID:", userId," chat type:", chat_type, " chat_instance:", chat_instance);
 
   if (chat_type !== "sender") {
-    await addBlock(userId);
-    return res.json({ ok: false, error: "Blocked for violation" });
+    return res.json({ ok: false, error: "This is warning,you will be blocked in future for violation" });
   }
 
   if (await isBlocked(userId)) {
-    return res.json({ ok: false, error: "You are blocked" });
+    return res.json({ ok: false, error:"You are blocked contact using below link" });
   }
 
   /* ================= FETCH FINAL ================= */
@@ -115,7 +114,7 @@ export default async function handler(req, res) {
     .single();
 
   if (!row) {
-    return res.json({ ok: false, error: "Invalid code" });
+    return res.json({ ok: false, error: "Invalid Link" });
   }
 
   /* ================= DIRECT FINAL ================= */
@@ -153,8 +152,7 @@ export default async function handler(req, res) {
     .single();
 
   if (!temp || temp.startapp !== row.first || temp.user_id !== userId) {
-    await addBlock(userId);
-    return res.json({ ok: false, error: "Invalid access path" });
+    return res.json({ ok: false, error: "This is warning,you will be blocked in future for violation" });
   }
 
   // clean temp
