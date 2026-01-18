@@ -1,5 +1,6 @@
 import TelegramBot from "node-telegram-bot-api";
 import { createClient } from "@supabase/supabase-js";
+import crypto from "crypto";
 
 /* ================= CONFIG ================= */
 
@@ -14,20 +15,12 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 /* ================= HELPERS ================= */
 
 async function isMod(id) {
-  const { data } = await supabase
-    .from("mods")
-    .select("id")
-    .eq("id", id)
-    .single();
+  const { data } = await supabase.from("mods").select("id").eq("id", id).single();
   return !!data;
 }
 
 async function isBlocked(id) {
-  const { data } = await supabase
-    .from("blocklist")
-    .select("id")
-    .eq("id", id)
-    .single();
+  const { data } = await supabase.from("blocklist").select("id").eq("id", id).single();
   return !!data;
 }
 
@@ -41,8 +34,16 @@ async function isUserAdmin(chatId, userId) {
 }
 
 function gen(prefix) {
-  return `${prefix}_${Math.random().toString(36).slice(2, 12)}`;
+  return `${prefix}_${crypto.randomBytes(5).toString("hex")}`;
 }
+
+function extractStartapp(val) {
+  if (val.includes("startapp=")) {
+    return val.split("startapp=")[1];
+  }
+  return val;
+}
+
 /* ================= COMMANDS ================= */
 
 async function cmdStart(msg) {
@@ -52,8 +53,9 @@ async function cmdStart(msg) {
     msg.chat.id,
 `📌 Commands
 
-/final <entity_id>
-/first <entity_id> <link>
+/final <entity_id | channel_link>
+
+/first <entity_id | channel_link | final | webapp_link> <short_link>
 
 /delete <entity_id | final | first | link>
 
@@ -61,60 +63,76 @@ Admin only`
   );
 }
 
-
-/* ---------- ADD ---------- */
+/* ---------- FINAL ---------- */
 
 async function cmdFinal(msg, args) {
   if (!(await isMod(msg.from.id))) return;
 
-  const entityId = parseInt(args[0]);
-  if (!entityId) {
-    return bot.sendMessage(msg.chat.id, "❌ Usage: /final <entity_id>");
-  }
-
-  if (!(await isUserAdmin(entityId, msg.from.id))) {
-    return bot.sendMessage(msg.chat.id, "❌ You must be admin in that entity");
+  const input = args[0];
+  if (!input) {
+    return bot.sendMessage(msg.chat.id, "❌ Usage: /final <entity_id | channel_link>");
   }
 
   const final = gen("final");
 
-  await supabase.from("my_links").upsert({
-    entity_id: entityId,
+  let entity_id = null;
+  let direct_link = null;
+
+  if (/^-100/.test(input)) {
+    entity_id = Number(input);
+    if (!(await isUserAdmin(entity_id, msg.from.id))) {
+      return bot.sendMessage(msg.chat.id, "❌ You must be admin in that entity");
+    }
+  } else {
+    direct_link = input;
+  }
+
+  await supabase.from("my_links").insert({
     final,
+    entity_id,
+    direct_link,
     owner_id: msg.from.id,
   });
 
   const url = `https://t.me/${BOT_USERNAME}/app?startapp=${final}`;
   await bot.sendMessage(msg.chat.id, `✅ Final created\n${url}`);
 }
+
+/* ---------- FIRST ---------- */
+
 async function cmdFirst(msg, args) {
   if (!(await isMod(msg.from.id))) return;
 
-  const entityId = parseInt(args[0]);
-  const link = args[1];
+  const target = args[0];
+  const short_link = args[1];
 
-  if (!entityId || !link) {
+  if (!target || !short_link) {
     return bot.sendMessage(
       msg.chat.id,
-      "❌ Usage: /first <entity_id> <link>"
+      "❌ Usage: /first <entity | final | link> <short_link>"
     );
   }
 
-  if (!(await isUserAdmin(entityId, msg.from.id))) {
-    return bot.sendMessage(msg.chat.id, "❌ You must be admin in that entity");
+  let row = null;
+
+  // Resolve FINAL
+  if (target.includes("startapp=") || target.startsWith("final_")) {
+    const final = extractStartapp(target);
+    const { data } = await supabase.from("my_links").select("*").eq("final", final).single();
+    row = data;
+  } else if (/^-100/.test(target)) {
+    const { data } = await supabase.from("my_links").select("*").eq("entity_id", Number(target)).single();
+    row = data;
+  } else {
+    const { data } = await supabase.from("my_links").select("*").eq("direct_link", target).single();
+    row = data;
   }
 
-  const { data } = await supabase
-    .from("my_links")
-    .select("*")
-    .eq("entity_id", entityId)
-    .single();
-
-  if (!data) {
-    return bot.sendMessage(msg.chat.id, "❌ Final not created yet");
+  if (!row) {
+    return bot.sendMessage(msg.chat.id, "❌ Final not found");
   }
 
-  if (data.first) {
+  if (row.first) {
     return bot.sendMessage(msg.chat.id, "❌ First already exists");
   }
 
@@ -122,8 +140,8 @@ async function cmdFirst(msg, args) {
 
   await supabase
     .from("my_links")
-    .update({ first, link })
-    .eq("entity_id", entityId);
+    .update({ first, short_link })
+    .eq("final", row.final);
 
   const url = `https://t.me/${BOT_USERNAME}/app?startapp=${first}`;
   await bot.sendMessage(msg.chat.id, `✅ First created\n${url}`);
@@ -134,7 +152,7 @@ async function cmdFirst(msg, args) {
 async function cmdDelete(msg, args) {
   if (!(await isMod(msg.from.id))) return;
 
-  const val = args[0];
+  const val = extractStartapp(args[0]);
   if (!val) {
     return bot.sendMessage(msg.chat.id, "❌ Usage: /delete <value>");
   }
@@ -143,7 +161,7 @@ async function cmdDelete(msg, args) {
     .from("my_links")
     .delete()
     .or(
-      `entity_id.eq.${val},final.eq.${val},first.eq.${val},link.eq.${val}`
+      `entity_id.eq.${val},final.eq.${val},first.eq.${val},direct_link.eq.${val}`
     );
 
   if (error) {
@@ -153,49 +171,33 @@ async function cmdDelete(msg, args) {
   await bot.sendMessage(msg.chat.id, "✅ Deleted");
 }
 
-/* ---------- BLOCK ---------- */
+/* ---------- BLOCK / UNBLOCK / LIST ---------- */
 
 async function cmdBlock(msg, args) {
   if (!(await isMod(msg.from.id))) return;
-
-  const userId = parseInt(args[0]);
+  const userId = Number(args[0]);
   if (!userId) return;
 
-  await supabase.from("blocklist").upsert(
-    { id: userId },
-    { onConflict: "id" }
-  );
-
+  await supabase.from("blocklist").upsert({ id: userId }, { onConflict: "id" });
   await bot.sendMessage(msg.chat.id, `🚫 Blocked ${userId}`);
 }
 
-/* ---------- UNBLOCK ---------- */
-
 async function cmdUnblock(msg, args) {
   if (!(await isMod(msg.from.id))) return;
-
-  const userId = parseInt(args[0]);
+  const userId = Number(args[0]);
   if (!userId) return;
 
   await supabase.from("blocklist").delete().eq("id", userId);
   await bot.sendMessage(msg.chat.id, `✅ Unblocked ${userId}`);
 }
 
-/* ---------- BLOCKLIST ---------- */
-
 async function cmdBlocklist(msg) {
   if (!(await isMod(msg.from.id))) return;
 
   const { data } = await supabase.from("blocklist").select("id");
+  if (!data.length) return bot.sendMessage(msg.chat.id, "📭 Blocklist empty");
 
-  if (!data.length) {
-    return bot.sendMessage(msg.chat.id, "📭 Blocklist empty");
-  }
-
-  const list = data.map(u => u.id).join("\n");
-  await bot.sendMessage(msg.chat.id, `🚫 *Blocked Users*\n\n${list}`, {
-    parse_mode: "Markdown",
-  });
+  await bot.sendMessage(msg.chat.id, data.map(x => x.id).join("\n"));
 }
 
 /* ================= ROUTER ================= */
@@ -219,27 +221,14 @@ async function route(msg) {
 
 /* ================= WEBHOOK ================= */
 
-/* ================== WEBHOOK ================== */
-
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(200).end();
-  }
-
-  const update = req.body;
+  if (req.method !== "POST") return res.status(200).end();
 
   try {
-    // PRIVATE / GROUP MESSAGES
-    if (update.message?.text) {
-      await route(update.message); // ✅ THIS WAS MISSING
-    }
-
-    // OPTIONAL: allow edited messages
-    if (update.edited_message?.text) {
-      await route(update.edited_message);
-    }
-  } catch (err) {
-    console.error("Webhook error:", err);
+    if (req.body.message?.text) await route(req.body.message);
+    if (req.body.edited_message?.text) await route(req.body.edited_message);
+  } catch (e) {
+    console.error("Webhook error:", e);
   }
 
   res.status(200).end();

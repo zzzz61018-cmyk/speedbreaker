@@ -6,6 +6,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
+/* ================= VERIFY ================= */
+
 function verifyTelegram(initData) {
   const urlParams = new URLSearchParams(initData);
   const hash = urlParams.get("hash");
@@ -22,6 +24,7 @@ function verifyTelegram(initData) {
     .createHmac("sha256", "WebAppData")
     .update(process.env.BOT_TOKEN)
     .digest();
+
   const calculatedHash = crypto
     .createHmac("sha256", secret)
     .update(dataCheckString)
@@ -30,29 +33,32 @@ function verifyTelegram(initData) {
   return calculatedHash === hash;
 }
 
-
-
 function hashIP(ip) {
   return crypto.createHash("sha256").update(ip).digest("hex");
 }
-async function getFirstLink(first) {
+
+/* ================= DB ================= */
+
+async function getShortLinkByFirst(first) {
   const { data } = await supabase
     .from("my_links")
-    .select("link")
+    .select("short_link")
     .eq("first", first)
     .single();
 
-  return data?.link;
+  return data?.short_link;
 }
-/* ================== HANDLER ================== */
+
+/* ================= HANDLER ================= */
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).end();
+  if (req.method !== "POST") {
+    return res.status(200).end();
+  }
 
   const { initData } = req.body;
-
   if (!verifyTelegram(initData)) {
-    return res.status(400).json({ error: "Invalid Telegram data" });
+    return res.status(400).json({ ok: false, error: "Invalid init data" });
   }
 
   const params = new URLSearchParams(initData);
@@ -60,17 +66,18 @@ export default async function handler(req, res) {
   const userJson = params.get("user");
 
   if (!startapp || !userJson) {
-    return res.status(400).json({ error: "Invalid Telegram data" });
+    return res.status(400).json({ ok: false, error: "Invalid Telegram data" });
   }
 
-  // you already enforce this, keeping safety
+  // Safety: first-only endpoint
   if (!startapp.startsWith("first_")) {
-    return res.status(400).json({ error: "Invalid startapp" });
+    return res.status(400).json({ ok: false, error: "Invalid startapp" });
   }
 
   const user = JSON.parse(userJson);
   const userId = user.id;
 
+  // IP (Vercel-safe)
   const ip =
     req.headers["x-forwarded-for"]?.split(",")[0] ||
     req.socket.remoteAddress ||
@@ -78,30 +85,33 @@ export default async function handler(req, res) {
 
   const ipHash = hashIP(ip);
 
-  // clean previous attempt from same IP
+  // Remove old attempt from same IP
   await supabase
     .from("temp_access")
     .delete()
     .eq("ip_hash", ipHash);
 
-  // store attempt
+  // Store new attempt
   await supabase.from("temp_access").insert({
     ip_hash: ipHash,
     user_id: userId,
-    startapp,
+    startapp, // this is FIRST
     verified: false,
   });
 
-  // fetch THIRD-PARTY LINK
-  const link = await getFirstLink(startapp);
+  // Resolve third-party short link
+  const short_link = await getShortLinkByFirst(startapp);
 
-  if (!link) {
-    return res.status(404).json({ error: "Invalid or inactive link" });
+  if (!short_link) {
+    return res.status(404).json({
+      ok: false,
+      error: "Invalid or inactive link",
+    });
   }
 
-  // ONLY return external link
+  // Frontend will redirect
   return res.json({
-    status: "ok",
-    link,
+    ok: true,
+    link: short_link,
   });
 }
