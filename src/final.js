@@ -5,7 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 const bot = new TelegramBot(process.env.BOT_TOKEN);
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
+  process.env.SUPABASE_SERVICE_KEY,
 );
 
 /* ================= VERIFY INIT DATA ================= */
@@ -95,14 +95,20 @@ export default async function handler(req, res) {
 
   const user = JSON.parse(userJson);
   const userId = user.id;
-  console.log(" user ID:", userId," chat type:", chat_type, " chat_instance:", chat_instance);
-
-  if (chat_type !== "sender") {
-    return res.json({ ok: false, error: "This is warning,you will be blocked in future for violation" });
-  }
+  console.log(
+    " user ID:",
+    userId,
+    " chat type:",
+    chat_type,
+    " chat_instance:",
+    chat_instance,
+  );
 
   if (await isBlocked(userId)) {
-    return res.json({ ok: false, error:"You are blocked contact using below link" });
+    return res.json({
+      ok: false,
+      error: "You are blocked contact using below link",
+    });
   }
 
   /* ================= FETCH FINAL ================= */
@@ -115,6 +121,12 @@ export default async function handler(req, res) {
 
   if (!row) {
     return res.json({ ok: false, error: "Invalid Link" });
+  }
+  if (row.force == true && chat_type !== "sender") {
+    return res.json({
+      ok: false,
+      error: "This is warning,you will be blocked in future for violation",
+    });
   }
 
   /* ================= DIRECT FINAL ================= */
@@ -152,7 +164,10 @@ export default async function handler(req, res) {
     .single();
 
   if (!temp || temp.startapp !== row.first || temp.user_id !== userId) {
-    return res.json({ ok: false, error: "This is warning,you will be blocked in future for violation" });
+    return res.json({
+      ok: false,
+      error: "This is warning,you will be blocked in future for violation",
+    });
   }
 
   // clean temp

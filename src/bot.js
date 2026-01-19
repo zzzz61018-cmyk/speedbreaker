@@ -72,6 +72,7 @@ async function cmdFinal(msg, args) {
   if (!input) {
     return bot.sendMessage(msg.chat.id, "❌ Usage: /final <entity_id | channel_link>");
   }
+  let force = args.length > 1 && args[1] === "force";
 
   const final = gen("final");
 
@@ -92,6 +93,7 @@ async function cmdFinal(msg, args) {
     entity_id,
     direct_link,
     owner_id: msg.from.id,
+    force
   });
 
   const url = `https://t.me/${BOT_USERNAME}/app?startapp=${final}`;
